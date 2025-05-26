@@ -2,9 +2,8 @@
 #define CLUB_H
 #include <fstream>
 #include <memory>
-#include <queue>
+#include <deque>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "Events.h"
@@ -26,13 +25,10 @@ namespace club {
         std::unordered_map<std::string, int> sitting_table;
         std::vector<int> cumulative_time;
         std::vector<int> revenue;
-        std::queue<std::string> queue;
-        int queue_size = 0;
+        std::deque<std::string> queue;
         int empty_tables;
     public:
         explicit Club(const std::string &);
-
-        ~Club();
 
     private:
         static std::vector<std::string> split(const std::string &, char);

@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <sstream>
 #include <iostream>
+#include <vector>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -19,14 +21,59 @@ namespace fs = std::filesystem;
     #define CLEANUP_CMD "rm -f " OUTPUT_FILE
 #endif
 
-class EndToEndTest : public ::testing::TestWithParam<int> {
-protected:
-    std::string test_data_dir;
+struct TestCasePaths {
+    std::string input_path;
+    std::string output_path;
+    std::string test_name;
+};
 
-    EndToEndTest() {
-        test_data_dir = (fs::current_path() / "tests" / "data").string() + "/";
+std::vector<TestCasePaths> discover_tests(const std::string& test_data_dir) {
+    std::vector<TestCasePaths> test_cases;
+
+    if (!fs::exists(test_data_dir)) {
+        std::cerr << "Test data directory not found: " << test_data_dir << std::endl;
+        return test_cases;
     }
 
+    for (const auto& entry : fs::recursive_directory_iterator(test_data_dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".in") {
+            fs::path input_path = entry.path();
+            fs::path output_path = input_path;
+            output_path.replace_extension(".out");
+
+            if (!fs::exists(output_path)) {
+                std::cerr << "Output file not found for input: " << input_path << std::endl;
+                continue;
+            }
+
+            fs::path relative_path = fs::relative(input_path, test_data_dir);
+            relative_path = relative_path.replace_extension(""); // Remove .in extension
+
+            std::string test_name = relative_path.generic_string(); // Use forward slashes
+            std::replace(test_name.begin(), test_name.end(), '/', '_');
+            std::replace(test_name.begin(), test_name.end(), '\\', '_');
+
+            test_cases.push_back({
+                input_path.string(),
+                output_path.string(),
+                test_name
+            });
+        }
+    }
+
+    return test_cases;
+}
+
+const std::vector<TestCasePaths>& get_test_cases() {
+    static std::vector<TestCasePaths> cases = []() {
+        std::string test_data_dir = (fs::current_path() / "tests" / "data").string();
+        return discover_tests(test_data_dir);
+    }();
+    return cases;
+}
+
+class EndToEndTest : public ::testing::TestWithParam<TestCasePaths> {
+protected:
     std::string read_file(const std::string& path) {
         std::ifstream file(path);
         if (!file) return "";
@@ -34,9 +81,8 @@ protected:
     }
 
     std::string run_program(const std::string& input_path) {
-        const std::string abs_input = fs::absolute(input_path).string();
         const std::string command =
-            std::string(CLUB_EXE) + " \"" + abs_input + "\" > " + OUTPUT_FILE;
+            std::string(CLUB_EXE) + " \"" + input_path + "\" > " OUTPUT_FILE;
 
         std::system(command.c_str());
         return read_file(OUTPUT_FILE);
@@ -71,26 +117,21 @@ protected:
 };
 
 TEST_P(EndToEndTest, AllTestCases) {
-    const int test_num = GetParam();
-    const std::string base = "test" + std::to_string(test_num);
-    const std::string input = test_data_dir + base + ".in";
-    const std::string expected = test_data_dir + base + ".out";
+    const auto& test_case = GetParam();
 
-    std::cout << "Running test " << test_num << "\n";
-    std::cout << "Input file: " << input << "\n";
-    std::cout << "Expected file: " << expected << "\n";
+    std::cout << "Running test: " << test_case.test_name << "\n";
+    std::cout << "Input file: " << test_case.input_path << "\n";
+    std::cout << "Expected file: " << test_case.output_path << "\n";
 
-    if (!fs::exists(input)) {
-        FAIL() << "Input file missing: " << input;
+    if (!fs::exists(test_case.input_path)) {
+        FAIL() << "Input file missing: " << test_case.input_path;
     }
-    if (!fs::exists(expected)) {
-        FAIL() << "Expected file missing: " << expected;
+    if (!fs::exists(test_case.output_path)) {
+        FAIL() << "Expected file missing: " << test_case.output_path;
     }
 
-    std::cout << "Running command: " << CLUB_EXE << " " << input << " > " << OUTPUT_FILE << "\n";
-
-    const std::string actual = run_program(input);
-    const std::string expected_content = read_file(expected);
+    const std::string actual = run_program(test_case.input_path);
+    const std::string expected_content = read_file(test_case.output_path);
 
     std::cout << "----- ACTUAL OUTPUT -----\n";
     std::cout << actual << "\n";
@@ -105,8 +146,8 @@ TEST_P(EndToEndTest, AllTestCases) {
 INSTANTIATE_TEST_SUITE_P(
     ClubTests,
     EndToEndTest,
-    ::testing::Range(1, 10),
-    [](const auto& info) {
-        return "Test" + std::to_string(info.param);
+    ::testing::ValuesIn(get_test_cases()),
+    [](const ::testing::TestParamInfo<TestCasePaths>& info) {
+        return info.param.test_name;
     }
 );

@@ -1,6 +1,7 @@
 #include "Club/Club.h"
 #include "Club/Utils.h"
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -22,7 +23,7 @@ namespace club {
                 is_ok = parse_event(tokens);
             }
         }
-        if (!is_ok) {
+        if (!is_ok || line_num < 3) {
             std::cout << line << std::endl;
             return;
         }
@@ -36,11 +37,6 @@ namespace club {
         print_result();
     }
 
-    Club::~Club() {
-        if (conf.is_open()) {
-            conf.close();
-        }
-    }
 
     std::vector<std::string> Club::split(const std::string &s, const char delim) {
         std::vector<std::string> elems;
@@ -63,13 +59,11 @@ namespace club {
         }
         int hour;
         int minute;
-        try {
-            hour = std::stoi(stime.substr(0, 2));
-            minute = std::stoi(stime.substr(3, 2));
-        } catch (...) {
-            return false;
-        }
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+
+        auto [ptr_hour, ec_hour] = std::from_chars(stime.data(), stime.data() + 2, hour);
+        auto [ptr_minute, ec_minute] = std::from_chars(stime.data() + 3, stime.data() + stime.size(), minute);
+
+        if (ec_hour != std::errc() || ec_minute != std::errc() || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
             return false;
         }
         result = hour * 60 + minute;
@@ -78,11 +72,12 @@ namespace club {
 
     bool Club::parse_times(const std::string &stime_first, int &result_first,
                            const std::string &stime_second, int &result_second) {
-        return parse_time(stime_first, result_first) && parse_time(stime_second, result_second);
+        return parse_time(stime_first, result_first) && parse_time(stime_second, result_second)
+               && result_first <= result_second;
     }
 
     bool Club::is_name_symbol(char c) {
-        return 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-';
+        return islower(c) || isdigit(c) || c == '_' || c == '-';
     }
 
     bool Club::parse_event(const std::vector<std::string> &tokens) {
@@ -121,6 +116,7 @@ namespace club {
         } else if (event_type == 4) {
             events.emplace_back(std::make_unique<EventClientLeave>(event_time, client_name));
         }
+        last_event_time = event_time;
         return true;
     }
 
@@ -160,12 +156,12 @@ namespace club {
 
     void Club::handle_client_come(const EventClientCome &event) {
         const std::string client = event.client_name;
-        if (sitting_table.contains(client)) {
-            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "YouShallNotPass"));
-            return;
-        }
         if (event.time < start_time || event.time > finish_time) {
             resulting_events.emplace_back(std::make_unique<EventError>(event.time, "NotOpenYet"));
+            return;
+        }
+        if (sitting_table.contains(client)) {
+            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "YouShallNotPass"));
             return;
         }
         sitting_table[client] = -1;
@@ -174,6 +170,10 @@ namespace club {
     void Club::handle_client_sit(EventClientSit &event) {
         const int new_table = event.table;
         const std::string client = event.client_name;
+        if (event.time < start_time || event.time > finish_time) {
+            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "NotOpenYet"));
+            return;
+        }
         if (!sitting_client[new_table].empty()) {
             resulting_events.emplace_back(std::make_unique<EventError>(event.time, "PlaceIsBusy"));
             return;
@@ -201,20 +201,37 @@ namespace club {
     }
 
     void Club::handle_client_wait(EventClientWait &event) {
+        if (event.time < start_time || event.time > finish_time) {
+            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "NotOpenYet"));
+            return;
+        }
+        if (!sitting_table.contains(event.client_name)) {
+            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "ClientUnknown"));
+            return;
+        }
         if (empty_tables > 0) {
             resulting_events.emplace_back(std::make_unique<EventError>(event.time, "ICanWaitNoLonger!"));
             return;
         }
-        if (queue_size >= total_tables) {
+        if (std::find(queue.begin(), queue.end(), event.client_name) != queue.end()) {
+            return;
+        }
+        if (sitting_table[event.client_name] != -1) {
+            return;
+        }
+        if (queue.size() >= total_tables) {
             resulting_events.emplace_back(std::make_unique<EventClientKicked>(event.time, event.client_name));
             return;
         }
-        queue.push(event.client_name);
-        queue_size++;
+        queue.push_back(event.client_name);
     }
 
     void Club::handle_client_leave(EventClientLeave &event) {
         const std::string client = event.client_name;
+        if (event.time < start_time || event.time > finish_time) {
+            resulting_events.emplace_back(std::make_unique<EventError>(event.time, "NotOpenYet"));
+            return;
+        }
         if (!sitting_table.contains(client)) {
             resulting_events.emplace_back(std::make_unique<EventError>(event.time, "ClientUnknown"));
             return;
@@ -228,11 +245,17 @@ namespace club {
             cumulative_time[cur_table] += diff_time;
             revenue[cur_table] += charge_money(diff_time);
         }
+        const auto it = std::find(queue.begin(), queue.end(), client);
+        if (it != queue.end()) {
+            queue.erase(it);
+        }
         sitting_table.erase(client);
-        if (queue_size > 0) {
+        if (cur_table == -1) {
+            return;
+        }
+        if (!queue.empty()) {
             std::string next_client = queue.front();
-            queue.pop();
-            --queue_size;
+            queue.pop_front();
             sitting_client[cur_table] = next_client;
             sitting_start_time[cur_table] = event.time;
             sitting_table[next_client] = cur_table;
@@ -247,14 +270,16 @@ namespace club {
             sitting_table.begin(), sitting_table.end()
         );
         std::sort(remaining_clients.begin(), remaining_clients.end());
-        for (const auto &[client, table] : remaining_clients) {
-            const int old_start_time = sitting_start_time[table];
-            const int diff_time = finish_time - old_start_time;
-            sitting_client[table] = "";
-            sitting_start_time[table] = -1;
-            sitting_table[client] = -1;
-            cumulative_time[table] += diff_time;
-            revenue[table] += charge_money(diff_time);
+        for (const auto &[client, table]: remaining_clients) {
+            if (table != -1) {
+                const int old_start_time = sitting_start_time[table];
+                const int diff_time = finish_time - old_start_time;
+                sitting_client[table] = "";
+                sitting_start_time[table] = -1;
+                sitting_table[client] = -1;
+                cumulative_time[table] += diff_time;
+                revenue[table] += charge_money(diff_time);
+            }
             resulting_events.emplace_back(std::make_unique<EventClientKicked>(finish_time, client));
         }
     }
@@ -271,16 +296,7 @@ namespace club {
     }
 
     bool Club::parse_positive_int(const std::string &sint, int &result) {
-        int value;
-        try {
-            value = std::stoi(sint);
-        } catch (...) {
-            return false;
-        }
-        if (value < 0) {
-            return false;
-        }
-        result = value;
-        return true;
+        auto [ptr, ec] = std::from_chars(sint.data(), sint.data() + sint.size(), result);
+        return ec == std::errc() && result > 0;
     }
 } // club
