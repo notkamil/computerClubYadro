@@ -3,6 +3,7 @@
 #include <fstream>
 #include <memory>
 #include <deque>
+#include <iostream>
 #include <unordered_map>
 #include <vector>
 
@@ -11,6 +12,8 @@
 namespace club {
     class Club {
         std::ifstream conf;
+        std::ostream& out;
+        bool is_corrupted = false;
         int total_tables = 0;
         int start_time = 0;
         int finish_time = 0;
@@ -26,9 +29,12 @@ namespace club {
         std::vector<int> cumulative_time;
         std::vector<int> revenue;
         std::deque<std::string> queue;
-        int empty_tables;
+        int empty_tables = 0;
+
     public:
-        explicit Club(const std::string &);
+        explicit Club(const std::string &, std::ostream& = std::cout);
+
+        void run();
 
     private:
         static std::vector<std::string> split(const std::string &, char);
@@ -58,6 +64,8 @@ namespace club {
         void handle_kick_out();
 
         void print_result() const;
+
+        void parse();
     };
 } // club
 

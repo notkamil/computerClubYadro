@@ -7,7 +7,11 @@
 #include <vector>
 
 namespace club {
-    Club::Club(const std::string &filename) : conf(filename) {
+    Club::Club(const std::string &filename, std::ostream& out) : conf(filename), out(out) {
+        parse();
+    }
+
+    void Club::parse() {
         std::string line;
         bool is_ok = true;
         while (is_ok && std::getline(conf, line)) {
@@ -24,7 +28,16 @@ namespace club {
             }
         }
         if (!is_ok || line_num < 3) {
-            std::cout << line << std::endl;
+            out << line << std::endl;
+            is_corrupted = true;
+        }
+        if (conf.is_open()) {
+            conf.close();
+        }
+    }
+
+    void Club::run() {
+        if (is_corrupted) {
             return;
         }
         empty_tables = total_tables;
@@ -36,7 +49,6 @@ namespace club {
         handle_events();
         print_result();
     }
-
 
     std::vector<std::string> Club::split(const std::string &s, const char delim) {
         std::vector<std::string> elems;
@@ -285,13 +297,13 @@ namespace club {
     }
 
     void Club::print_result() const {
-        std::cout << format_time(start_time) << std::endl;
+        out << format_time(start_time) << std::endl;
         for (const auto &event: resulting_events) {
-            std::cout << event->to_conf_line() << std::endl;
+            out << event->to_conf_line() << std::endl;
         }
-        std::cout << format_time(finish_time) << std::endl;
+        out << format_time(finish_time) << std::endl;
         for (int i = 0; i < total_tables; i++) {
-            std::cout << i + 1 << " " << revenue[i] << " " << format_time(cumulative_time[i]) << std::endl;
+            out << i + 1 << " " << revenue[i] << " " << format_time(cumulative_time[i]) << std::endl;
         }
     }
 
